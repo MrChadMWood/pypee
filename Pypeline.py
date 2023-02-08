@@ -1,64 +1,11 @@
-import json
-import re
-import traceback
-import textwrap
 from enum import Enum
+import traceback
+from functools import wraps
 from types import MappingProxyType
 from typing import Mapping
-
-
-# Handles loading of tasks
-def dynamically_read(raw_tasks, task_kwargs=dict()):
-    regex_pattern = re.compile(r'{{(.*?)}}')
-    
-    # Hook to replace in-string {{variables}} with kwarg values
-    def regex_hook(match):            
-        if not match.group(1) in task_kwargs:
-            raise ValueError(
-                f'"{match.group(1)}" was dynamically entered '
-                f'but no value was specified for this key.')
-        else:
-            return task_kwargs[match.group(1)]
-    
-    # Hook to catch in-string {{variables}}
-    def json_hook(_dict):
-        for key, val in _dict.items():
-            _dict[key] = json.loads(
-                regex_pattern.sub(regex_hook, json.dumps(val)))
-            
-        return _dict
-
-    # Returns the filled tasks
-    with raw_tasks:
-        return json.loads(
-            raw_tasks.read(),
-            object_hook=json_hook
-        )
-    
-    
-def catch_errors(func):
-    def wrapper(*args, **kwargs):
-        try:
-            response = func(*args, **kwargs)
-            return (response, None)
-        except Exception as e:
-            error = dict(
-                error = e,
-                trace = traceback.format_exc()
-            )
-            return (None, error)
-    return wrapper
-
-
-def get_task_obj(handle, task):
-    if task.get('request'):
-        task_obj = SingleRequestTask(handle, **task)
-    elif task.get('requests'):
-        task_obj = MultiRequestTask(handle, **task)
-    else:
-        raise ValueError("Either 'request' or 'requests' must be supplied.")
-
-    return task_obj
+import textwrap
+import json
+import re
 
 
 class StatusError(Exception):
@@ -69,17 +16,15 @@ class StatusError(Exception):
         return self.message
 
     
-class PipeStatus(Enum):
-    IDLE = 'pending'
-    READY = 'ready'
-    INCOMPLETE = 'incomplete'
-    COMPLETE = 'complete'
-    FAIL = 'fail'
+class OpStatus(Enum):
+    UNINITIALIZED = 'uninitialized'
+    INITIALIZED = 'initialized'
+    FAIL = 'fail' 
     
     def __repr__(self):
         return self.value
-
     
+
 class TaskStatus(Enum):
     PENDING = 'pending'
     INCOMPLETE = 'incomplete'
@@ -90,144 +35,260 @@ class TaskStatus(Enum):
         return self.value
 
     
-class HandleStatus(Enum):
-    UNINITIALIZED = 'uninitialized'
-    INITIALIZED = 'initialized'
-    FAIL = 'fail' 
+class PipeStatus(Enum):
+    IDLE = 'idle'
+    READY = 'ready'
+    INCOMPLETE = 'incomplete'
+    COMPLETE = 'complete'
+    FAIL = 'fail'
     
     def __repr__(self):
         return self.value
     
     
-class Handle:
-    def __init__(self, handle):
-        self.status = HandleStatus.UNINITIALIZED
-        self.handle = handle
-        
-    def __initialize(self, credentials):
+class OperatorUtils:
+    def __init__(self, catch_runtime_errors=True):
+        self.catch_runtime_errors = catch_runtime_errors
+    
+    @staticmethod
+    def _catch_runtime_errors(func):
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            if not self.catch_runtime_errors:
+                return func(self, *args, **kwargs), None
+            else:
+                try:
+                    response = func(self, *args, **kwargs)
+                    return (response, None)
+                except Exception as e:
+                    error = dict(
+                        type=e.__class__.__name__,
+                        message=str(e),
+                        trace=traceback.format_exc()
+                    )
+                return (None, error)     
+        return wrapper
+
+    
+class Handle(OperatorUtils):
+    def __init__(self, api_client, catch_runtime_errors=True, *args, **kwargs):
+        super().__init__(catch_runtime_errors=catch_runtime_errors)
+        self._status = OpStatus.UNINITIALIZED
+        self.api_client = api_client
+        self.initialize_error = None
+    
+    def initialize(self, credentials):
         try:
-            self.handle = self.handle(credentials)
-            self.status = HandleStatus.INITIALIZED
+            self.api_client = self.api_client(credentials)
+            self._status = OpStatus.INITIALIZED
         except Exception as e:
-            self.status = HandleStatus.FAIL
-            print(f"Handle creation failed with error: {e}")
+            self._status = OpStatus.FAIL
+            self.initialize_error = dict(
+                type=e.__class__.__name__,
+                message=str(e),
+                trace=traceback.format_exc()
+            )
+            raise e from None
             
-        return self.status
+        return self._status
     
+    @property
+    def status(self) -> OpStatus:
+        return self._status
     
-    @catch_errors
-    def run(self, request):
-        response = None
-        
-        if self.status == HandleStatus.INITIALIZED:
-            response = self.handle.get_data(request)
+    @OperatorUtils._catch_runtime_errors
+    def run(self, request, handle_operations={}):
+        if self._status == OpStatus.INITIALIZED:
+            response, error = self.api_client.get_data(request, **handle_operations)
         else:
             raise StatusError(
-                f'Can not run while Handle is {self.status}')
+                f'Can not run while Handle is {self._status}')
+            
+        return response, error
+    
+
+class Wrangler(OperatorUtils):
+    def __init__(self, wrangler, *args, **kwargs):
+        super().__init__(catch_runtime_errors=True)
+        self._status = OpStatus.UNINITIALIZED
+        self.wrangler = wrangler
+        self.initialize_error = None
+    
+    def initialize(self):
+        try:
+            self.wrangler = self.wrangler()
+            self._status = OpStatus.INITIALIZED
+        except Exception as e:
+            self._status = OpStatus.FAIL
+            self.initialize_error = dict(
+                type=e.__class__.__name__,
+                message=str(e),
+                trace=traceback.format_exc()
+            )
+            raise e from None
+            
+        return self._status
+    
+    @property
+    def status(self) -> OpStatus:
+        return self._status
+    
+    @OperatorUtils._catch_runtime_errors
+    def run(self, data, wrangle_operations={}):
+        if self._status == OpStatus.INITIALIZED:
+            response = self.wrangler.wrangle(data, **wrangle_operations)
+        else:
+            raise StatusError(
+                f'Can not run while Wrangler is {self._status}')
             
         return response
     
     
-class Wrangler:
-    def __init__(self, wrangler):
-        self.status = 'initialized'
+class Loader(OperatorUtils):
+    def __init__(self, loader, *args, **kwargs):
+        super().__init__(catch_runtime_errors=True)
+        self._status = OpStatus.UNINITIALIZED
+        self.loader = loader
+        self.initialize_error = None
+    
+    def initialize(self):
+        try:
+            self.wrangler = self.loader()
+            self._status = OpStatus.INITIALIZED
+        except Exception as e:
+            self._status = OpStatus.FAIL
+            self.initialize_error = dict(
+                type=e.__class__.__name__,
+                message=str(e),
+                trace=traceback.format_exc()
+            )
+            raise e from None
+            
+        return self._status
+    
+    @property
+    def status(self) -> OpStatus:
+        return self._status
+    
+    @OperatorUtils._catch_runtime_errors
+    def run(self, data, load_operations={}):
+        if self._status == OpStatus.INITIALIZED:
+            response = self.loader.load(data, **load_operations)
+        else:
+            raise StatusError(
+                f'Can not run while Wrangler is {self._status}')
+            
+        return response
+    
+    
+class TaskOpsUtils:
+    def __init__(self, handle, wrangler=None, loader=None):
+        self.handle = handle
         self.wrangler = wrangler
-        # TODO: Complete with similar logic to Handle
-        
-        
-class Task:
-    def __init__(self, handle, name, wrangler=None, loader=None, description=None, 
-                 **kwargs): 
-        self._status: TaskStatus = TaskStatus.PENDING
-        self.name: str = name
-        self.description: str = description
-        
-        self.handle: object = handle
-        self.wrangler: object = wrangler
-        self.loader: object = None
-        
+        self.loader = loader
+
         self.handle_result = None
         self.wrangle_result = None
         self.load_result = None
-        self.error: dict = None
+        self.error = None
         
-        self.info: Mapping = MappingProxyType(dict(
-            name=name,
-            description=description,
-            handle=handle,
-            wrangler=wrangler,
-            loader=loader,
-            **kwargs
-        ))
-        
-        self.steps = {'request': TaskStatus.PENDING}
+        self.operations = {'handle': TaskStatus.PENDING}
         if wrangler:
-            self.steps.update({'wrangle': TaskStatus.PENDING})
+            self.operations.update({'wrangle': TaskStatus.PENDING})
         if loader:
-            self.steps.update({'load': TaskStatus.PENDING})
+            self.operations.update({'load': TaskStatus.PENDING})
+    
+    def _run_operation(self, op, runner, skip_status_update=False):
+        self.operations[op] = TaskStatus.INCOMPLETE
+
+        response, self.error = runner.run(self)
+        status = TaskStatus.FAIL if self.error is not None else TaskStatus.COMPLETE
         
-    @property
-    def status(self) -> TaskStatus:
-        return self._status
-    
-    def __repr__(self):
-        return f"Task(name='{self.name} status={self._status.value},')"
+        print(response, status, self.error)
 
-    def update_status(self):
-        if len(set(self.steps.values())) == 1:
-            self._status = set(self.steps.values())[0]
-        else:
-            self._status = TaskStatus.INCOMPLETE
-    
-    def run(self):
-        results = dict()
-        for step in self.steps:
-            if step == 'request':
-                result = self.run_request(skip_status_update=True)
-            elif step == 'wrangle':
-                result = self.run_wrangle(skip_status_update=True)
-            elif step == 'load':
-                result = self.run_load(skip_status_update=True)
-                
-            results.update({step: result})
-                
-        self.update_status()              
-        return results  
-
-    
-class SingleRequestTask(Task):
-    def __init__(self, handle: object, request: dict, name: str, 
-                 **kwargs):        
-        super().__init__(handle, name, **kwargs)
-        self.request: dict = request
-
-    def run_step(step_name, runner, skip_status_update=False):
-        self.steps[step_name] = TaskStatus.INCOMPLETE
-
-        result, self.error = runner.run(self)
-        result = TaskStatus.FAIL if self.error else TaskStatus.COMPLETE
-
-        self.steps[step_name] = result
+        self.operations[op] = status
+        self.data[op] = response
 
         if not skip_status_update:
             self.update_status()
 
-        return result
+        return status
+
+    
+class Task(TaskOpsUtils):
+    def __init__(self, name, req_dict, handle, wrangler=None, loader=None, description=None, **kwargs):
+        super().__init__(handle, wrangler, loader)
+
+        self._status = TaskStatus.PENDING
+        self.name = name
+        self.description = description
+        self.data = dict(
+            handle=None,
+            wrangle=None,
+            load=None
+        )
+        self.info = MappingProxyType({
+            'name': name,
+            'description': description,
+            'type': self.__class__.__name__,
+            'req': req_dict,
+            'handle': handle,
+            'wrangler': wrangler,
+            'loader': loader,
+            **kwargs
+        })
+
+    def __repr__(self):
+        return f"Task(name='{self.name}', status='{self.status}')"
+
+    @property
+    def status(self) -> TaskStatus:
+        return self._status.value
+    
+    def run(self):
+        statuses = {}
+        for op in self.operations:
+            status = None
+            if op == 'handle':
+                status = self.run_request(skip_status_update=True)
+            elif op == 'wrangle':
+                status = self.run_wrangle(skip_status_update=True)
+            elif op == 'load':
+                status = self.run_load(skip_status_update=True)
+
+            statuses[op] = status
+
+        self.update_status()
+        return statuses
+
+    def update_status(self):
+        if len(set(self.operations.values())) == 1:
+            self._status = set(self.operations.values()).pop()
+        else:
+            self._status = TaskStatus.INCOMPLETE
+
+            
+class SingleRequestTask(Task):
+    def __init__(self, name, request, handle, wrangler=None, loader=None, **kwargs):
+        super().__init__(name, request, handle, wrangler, loader, **kwargs)
+        self.request = request
 
     def run_request(self, skip_status_update=False):
-        return run_step('request', self.handle, skip_status_update)
+        status = self._run_operation('handle', self.handle, skip_status_update)
+        return status
 
     def run_wrangle(self, skip_status_update=False):
-        return run_step('wrangle', self.wrangler, skip_status_update)
+        status = self._run_operation('wrangle', self.wrangler, skip_status_update)
+        return status
 
     def run_load(self, skip_status_update=False):
-        return run_step('load', self.loader, skip_status_update)
+        status = slef._run_operation('load', self.loader, skip_status_update)
+        return status
 
     
 class MultiRequestTask(Task):
-    def __init__(self, handle: object, requests: dict, 
-                 **kwargrs):        
-        super().__init__(handle, name, **kwargrs)
+    def __init__(self, name, request, handle, wrangler=None, loader=None, **kwargs):      
+        super().__init__(name, requests, handle, wrangler, loader, **kwargrs)
         self.requests: dict = requests
         
     def run_request(self):
@@ -235,82 +296,170 @@ class MultiRequestTask(Task):
         # TODO: Implement proper multitask logic from v1
         
         
-
-def task_by_name_or_index(func):
-    def wrapper(self, task):
-        if isinstance(task, str):
-            task = next((t for t in self.task_objs if t.name == task), None)
-            if task is None:
-                raise ValueError(f'Task with name "{task}" not found.')
-                
-        elif isinstance(task, int):
-            try:
-                task = self.task_objs[task]
-            except IndexError:
-                raise ValueError(f'Task with index "{task}" not found.')
-                
-        elif isinstance(task, Task):
-            pass
+class TaskManagementUtils:   
+    def __init__(self, tasks):
+        self.operator_statuses = dict(
+            handle = None,
+            wrangler = None,
+            loader = None)
+        task_objs = [
+            self.task_obj_from_dict(
+                task_data, self.handle, self.wrangler, self.loader
+            ) for task_data in tasks]
         
-        else:
-            raise ValueError(f'<task> must be a name, index, or Task object')
+        self.task_map = {task.name: task for task in task_objs}
+
+    # Handles dynamic reading of in-string variables
+    @staticmethod
+    def dynamically_read(raw_tasks, task_kwargs=dict()):
+        regex_pattern = re.compile(r'{{(.*?)}}')
+        
+        # Hook to replace in-string {{variables}} with kwarg values
+        def regex_hook(match):            
+            if not match.group(1) in task_kwargs:
+                raise ValueError(
+                    f'"{match.group(1)}" was dynamically entered '
+                    f'but no value was specified for this key.')
+            else:
+                return task_kwargs[match.group(1)]
             
-        func(self, task)
-    return wrapper
+        # Hook to catch in-string {{variables}}
+        def json_hook(_dict):
+            for key, val in _dict.items():
+                _dict[key] = json.loads(
+                    regex_pattern.sub(regex_hook, json.dumps(val)))
 
+            return _dict
 
-class Pipe:
+        # Returns the filled tasks
+        with raw_tasks:
+            return json.loads(
+                raw_tasks.read(),
+                object_hook=json_hook
+            )
+        
+    @staticmethod
+    def read_tasks(tasks_file_path=None, task_kwargs=None, dynamic_reader=None):
+        print(tasks_file_path)
+        with open(tasks_file_path) as raw_tasks:
+            if task_kwargs:
+                tasks = dynamic_reader(raw_tasks, task_kwargs)
+            else:
+                tasks = json.load(raw_tasks)
+        task_names = set(task['name'] for task in tasks)
+        if len(task_names) != len(tasks):
+            duplicates = task_names - set(task['name'] for task in tasks)
+            raise ValueError(f"Duplicate tasks with names: {duplicates}")
+
+        return tasks
+    
+    @staticmethod
+    def task_obj_from_dict(task, handle, wrangler=None, loader=None):
+        name = task.pop('name')
+        if task.get('request'):
+            request = task.pop('request')
+            task_obj = SingleRequestTask(name, request, handle, wrangler, loader, **task)
+        elif task.get('requests'):
+            request = task.pop('requests')
+            task_obj = MultiRequestTask(name, request, handle, wrangler, loader, **task)
+        else:
+            raise ValueError("Either 'request' or 'requests' must be supplied.")
+
+        return task_obj
+
+    def add_task(self, task_name, task_obj=None, task_dict=None):
+        if task_dict:
+            task_obj = task_obj_from_dict(task_dict, self.handle, self.wrangler, self.loader)
+            
+        self.task_map.update(task_name=task_obj)
+            
+    def get_task_status(self, task_name):
+        task = self.tasks.get(task_name)
+        if task is None:
+            raise ValueError(f"Task {task_name} not found")
+            
+        return task.status
+    
+    def get_task_statuses(self):
+        statuses = dict()
+        for task_name, task in self.task_map.items():
+            statuses.update(task_name=task.status)
+            
+        return statuses
+    
+    def get_task_status_counts(self):
+        statuses = dict(
+            pending = 0,
+            incomplete = 0,
+            complete = 0,
+            failed = 0,
+        )
+        
+        for task_name, task in self.task_map.items():
+            statuses[task.status] += 1
+            
+        return statuses
+        
+    def run_task(self, task_name):
+        task = self.task_map.get(task_name)
+        if task is None:
+            raise ValueError(f"Task {task_name} not found")
+        
+        status = task.run()
+        return status
+    
+    def get_task_data(self, task_name, operator=None):
+        task = self.task_map.get(task_name)
+        if task is None:
+            raise ValueError(f"Task {task_name} not found")
+        
+        if operator:
+            data = task.data[operator]
+        else:
+            data = task.data
+            
+        return data
+
+    def get_all_tasks_data(self, operator=None):
+        data = dict()
+        
+        if operator:
+            for task_name, task in self.task_map.items():
+                data.update(task_name=task.data[operator])
+        else:
+            for task_name, task in self.task_map.items():
+                data.update(task_name=task.data)
+            
+        return data
+
+    
+class Pipe(TaskManagementUtils):
     def __init__(self, handle, tasks=None, tasks_file_path=None, tasks_kwargs=None, 
                  wrangler=None, loader=None, credential_manager=None, secret_id=None, 
-                 name=None):   
-        self._status: PipeStatus = PipeStatus.IDLE    
+                 name=None):
+        self._status: PipeStatus = PipeStatus.IDLE
         self.name = name
         self.secret_id = secret_id
         self.handle = Handle(handle)
-        self.wrangler = wrangler
-        self.loader = loader
+        self.wrangler = Wrangler(wrangler) if wrangler else None
+        self.loader = Loader(loader) if loader else None
+        tasks = tasks if tasks is not None else self.read_tasks(
+            tasks_file_path, tasks_kwargs, dynamic_reader=self.dynamically_read)
+        super().__init__(tasks)
         
-        tasks = tasks if tasks is not None else self.read_tasks(tasks_file_path, tasks_kwargs)
-        task_objs = [get_task_obj(handle, task_data) for task_data in tasks]
-        self.task_map = MappingProxyType({task.name: task for task in task_objs})
-        self.pending_tasks = list(self.task_map.values())
-        self.complete_tasks = []
-        self.failed_tasks = []
-        self.status_count = {
-            TaskStatus.PENDING: len(self.pending_tasks),
-            TaskStatus.INCOMPLETE: 0,
-            TaskStatus.COMPLETE: 0
-        }
-
+        self._pipe_failed = False  
+        
     @property
     def status(self) -> PipeStatus:
-        return self._status
-    
+        return self._status   
 
     def __repr__(self):
         task_strs = [task.__repr__() for task in self.task_map.values()]
         task_str = '\n'.join(task_strs)
         indented_task_str = textwrap.indent(task_str, '  ')
-        return f"Pipe(name='{self.name}', status={self._status.value},\n{indented_task_str}\n)"
-
-
-    
-    @staticmethod
-    def read_tasks(tasks_file_path=None, task_kwargs=None):
-        task_names = set()
-        with open(tasks_file_path) as raw_tasks:
-            if task_kwargs:
-                tasks = dynamically_read(raw_tasks, task_kwargs)
-            else:
-                tasks = json.load(raw_tasks)
-        
-        for task in tasks:
-            if task['name'] in task_names:
-                raise ValueError(f"Task with name '{task['name']}' already exists.")
-            task_names.add(task['name'])
-
-        return tasks
-    
+        return (
+            f"Pipe(name='{self.name}', status='{self._status.value}',\n"
+                    f"{indented_task_str}\n)")
     
     def update_status(self):
         if self.status_count[TaskStatus.PENDING] == len(self.task_map):
@@ -321,98 +470,71 @@ class Pipe:
             self.status = PipeStatus.INCOMPLETE
 
         return self.status
-
     
-    def initialize_task(self, task):
-        if task in self.complete_tasks:
-            self.complete_tasks.remove(task)
-            self.status_count[TaskStatus.COMPLETE] -= 1
-        elif task in self.failed_tasks:
-            self.failed_tasks.remove(task)
-            self.status_count[TaskStatus.FAILED] -= 1
-
-        if task not in self.pending_tasks:
-            self.pending_tasks.append(task)
-            self.status_count[TaskStatus.PENDING] += 1
-
-        status = self.update_status()
+    def initialize_handle(self, credentials_obj):
+        status = self.handle.initialize(credentials_obj)
+        self.operator_statuses.update(handle=status)
+        if status == OpStatus.FAIL:
+            self.status = PipeStatus.FAIL
+            
         return status
     
+    def initialize_wrangler(self):
+        if self.wrangler:
+            status = self.wrangler.initialize()
+            self.operator_statuses.update(wrangler=status)
+
+            return status
     
-    def maintain_status_count(func):
-        def wrapper(self, task, *args, **kwargs):
-            self.initialize_task(task)
+    def initialize_loader(self):
+        if self.loader:
+            status = self.loader.initialize()
+            self.operator_statuses.update(wrangler=status)
 
-            result = func(self, task, *args, **kwargs)
-
-            if result == TaskStatus.COMPLETE:
-                self.complete_tasks.append(task)
-                self.status_count[TaskStatus.COMPLETE] += 1
-            else:
-                self.failed_tasks.append(task)
-                self.status_count[TaskStatus.FAILED] += 1
-
-            return result
-
-        return wrapper
-    
-    def initialize_handle(self, credential_obj):
-        if self.handle.status is not HandleStatus.INITIALIZED:
-            result = self.handle.__initialize(credential_obj)
-            
-            if result == HandleStatus.INITIALIZED:
-                self._status = PipeStatus.READY
-            else:
-                self._status = PipeStatus.FAIL
-            
-        return self.handle.status
-    
-    @maintain_status_count
-    def run_task(self, task, wrangle=True, load=True):
-        result = task.run()
-        return result
-
-    def run_tasks(self, tasks):
-        for task in tasks:
-            self.run_task(task)
-
-    def run_pipe(self):
-        self.run_tasks(self.task_map.values())
+            return status
+        
+    def initialize(self, credentials_obj):
+        self.initialize_handle(credentials_obj)
+        self.initialize_wrangler()
+        self.initialize_loader()
+        
+        return self.operator_statuses
+        
+    def run(self):
+        statuses = dict()
+        for task_name, task in self.task_map.items():
+            new_status = task.run()
+            statuses.update({task_name:new_status})
+        
+        return statuses
         
         
-def check_pipe_not_failed(func):
-    def wrapper(self, pipe_name, *args, **kwargs):
-        status = self.pipes[pipe_name].status
-        
-        if status is PipeStatus.IDLE:
-            status = self.initialize_pipe(pipe_name) 
-        if status is PipeStatus.FAIL:
-            raise AttributeError(f'{pipe_name} is failed and cannot be ran.')
-        return func(self, pipe_name, *args, **kwargs)
-    
-    return wrapper
-        
-
 class Pipeline(Pipe):
     def __init__(self, pipes: [dict,], pipeline_id=None):
         #self.loader = loader
         self.id = pipeline_id
         self.credential_manager = credential_manager
         self.pipes = MappingProxyType({pipe.name:pipe for pipe in pipes})
-
+    
     def __repr__(self):
         pipe_strs = [pipe.__repr__() for pipe in self.pipes.values()]
         pipe_str = '\n'.join(pipe_strs)
         indented_pipe_str = textwrap.indent(pipe_str, '  ')
-        return f"Pipeline(id='{self.id}',\n{indented_pipe_str}\n)"
+        return (
+            f"Pipeline(id='{self.id}',\n"
+                    f"{indented_pipe_str}\n)")
+    
+    @staticmethod
+    def _check_pipe_not_failed(pipe):
+        if pipe._pipe_failed:
+            raise Exception("Pipeline failed earlier, cannot run further operations")
     
     def initialize_pipe(self, pipe_name):
         pipe = self.pipes[pipe_name]    
-        credential_obj = credential_manager(pipe.secret_id)
-        handle_status = pipe.initialize_handle(credential_obj)
+        credential_obj = self.credential_manager(pipe.secret_id)
+        status = pipe.initialize(credential_obj)
             
-        return handle_status
-        
+        return status  
         
     def initialize_pipes(self, pipe_names):
         results = dict()
@@ -421,14 +543,21 @@ class Pipeline(Pipe):
             
         return results
             
-    def initialize_pipeline(self):
+    def initialize(self):
         results = self.initialize_pipes(self.pipes.keys()) 
         return results
     
-    @check_pipe_not_failed
     def run_task(self, pipe_name, task_name):
+        self._check_pipe_not_failed(pipe)
         self.pipes[pipe_name].run_task(task_name)     
         
-    @check_pipe_not_failed
     def run_pipe(self, pipe_name):
-        result = self.pipes[pipe_name].run_pipe()
+        pipe = self.pipes[pipe_name]
+        self._check_pipe_not_failed(pipe)
+        result = pipe.run()
+        
+        return result
+    
+    def get_pipe_data(self, pipe_name, operator=None):
+        pipe = self.pipes[pipe_name]
+        data = pipe.get_all_tasks_data(operator=operator)
