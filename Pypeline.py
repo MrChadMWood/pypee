@@ -3,6 +3,7 @@ import traceback
 from functools import wraps
 from types import MappingProxyType
 from typing import Mapping
+from pandas import json_normalize
 import textwrap
 import json
 import re
@@ -10,10 +11,10 @@ import re
 
 """
 Title: Pypeline
-Current Version: 0.0.03
+Current Version: 0.0.04
 Created By: Chad Wood
 Last Modified On: 20230208
-Last Modification: Fixed bugs preventing use. Pypeline should have reliable basic functionality now.
+Last Modification: Added logic to MultiRequestTask for performing sequenced requests. Options for improving the implementation should be explored, as it isn't exactly elegant at the moment. Review TaskOpsUtils._run_opperation() comments for more details.
 """
 
 class StatusError(Exception):
@@ -359,12 +360,19 @@ class TaskOpsUtils:
         status = TaskStatus.FAIL if self.error is not None else TaskStatus.COMPLETE
 
         self.operations[op] = status
-        self.data[op] = response
+        
+        # TODO: Update this. Does there really need to be unique handling ber type in here...?
+        # Should self.data be stored in the bottom derived classes?
+        if self.__class__.__name__ == 'MultiRequestTask' and op == 'handle':
+            self.data[op].append(response)
+        else:
+            self.data[op] = response
+            
 
         if not skip_status_update:
             self.update_status()
 
-        return status
+        return status, response
 
     
 class Task(TaskOpsUtils):
@@ -476,15 +484,15 @@ class SingleRequestTask(Task):
         self.request = request
 
     def run_request(self, skip_status_update=False):
-        status = self._run_operation('handle', self.handle, self.request, skip_status_update)
+        status, response = self._run_operation('handle', self.handle, self.request, skip_status_update)
         return status
 
     def run_wrangle(self, skip_status_update=False):
-        status = self._run_operation('wrangle', self.wrangler, self, skip_status_update)
+        status, response = self._run_operation('wrangle', self.wrangler, self, skip_status_update)
         return status
 
     def run_load(self, skip_status_update=False):
-        status = slef._run_operation('load', self.loader, self, skip_status_update)
+        status, response = self._run_operation('load', self.loader, self, skip_status_update)
         return status
 
     
@@ -505,13 +513,50 @@ class MultiRequestTask(Task):
     :method:
     - run_request(): Runs the requests for the task.
     """
-    def __init__(self, name, request, handle, wrangler=None, loader=None, **kwargs):      
-        super().__init__(name, requests, handle, wrangler, loader, **kwargrs)
+    def __init__(self, name, requests, handle, wrangler=None, loader=None, **kwargs):      
+        super().__init__(name, requests, handle, wrangler, loader, **kwargs)
         self.requests: dict = requests
+        self.pattern = re.compile(r'<<(.*?)>>')
+        self.cached_unique_values = {}
+        self.data.update(handle=list())
         
-    def run_request(self):
-        pass
-        # TODO: Implement proper multitask logic from v1
+    def run_request(self, skip_status_update=False):
+        statuses = dict()
+        pattern = self.pattern
+        
+        # Use the stored unique values if possible
+        def hook(match, separator):
+            in_string_var = match.group(1)
+            if in_string_var in self.cached_unique_values:
+                unique_values = self.cached_unique_values[in_string_var]
+            else:
+                unique_values = last_response[in_string_var].unique().tolist()
+                self.cached_unique_values[in_string_var] = unique_values
+            
+            return separator.join(map(str, unique_values))
+        
+        last_response = None
+        for _iter, request in self.requests.items():
+            if last_response is not None:
+                separator = request.get("%separator%", ", ")
+                request = json.loads(pattern.sub(lambda x: hook(x, separator), json.dumps(request)))
+            
+            status, response = self._run_operation('handle', self.handle, request, skip_status_update)
+            last_response = json_normalize(response)
+            statuses.update({_iter:status})
+                                  
+            if status is not TaskStatus.COMPLETE:
+                break
+        
+        return statuses
+                                  
+    def run_wrangle(self, skip_status_update=False):
+        status, response = self._run_operation('wrangle', self.wrangler, self, skip_status_update)
+        return status
+
+    def run_load(self, skip_status_update=False):
+        status, response = self._run_operation('load', self.loader, self, skip_status_update)
+        return status
         
         
 class TaskManagementUtils:
@@ -716,8 +761,7 @@ class Pipe(TaskManagementUtils):
     Inherits all methods from the parent class, TaskManagementUtils.
     """
     def __init__(self, handle, tasks=None, tasks_file_path=None, tasks_kwargs=None, 
-                 wrangler=None, loader=None, credential_manager=None, secret_id=None, 
-                 name=None):
+                 wrangler=None, loader=None, secret_id=None, name=None):
         self._status: PipeStatus = PipeStatus.IDLE
         self.name = name
         self.secret_id = secret_id
@@ -814,7 +858,7 @@ class Pipeline(Pipe):
     - `credential_manager`: An object for managing credentials.
     - `pipes`: A dictionary mapping pipe names to pipes.
     """
-    def __init__(self, pipes: [dict,], pipeline_id=None):
+    def __init__(self, pipeline_id: str, pipes: [dict,], credential_manager: 'func'):
         #self.loader = loader
         self.id = pipeline_id
         self.credential_manager = credential_manager
@@ -861,6 +905,15 @@ class Pipeline(Pipe):
         result = pipe.run()
         
         return result
+    
+    def run(self):
+        results = dict()
+        for pipe_name, pipe in self.pipes.items():
+            self._check_pipe_not_failed(pipe)
+            result = pipe.run()
+            results.update({pipe_name:result})
+        
+        return results
     
     def get_pipe(self, pipe_name):
         return self.pipes[pipe_name]
