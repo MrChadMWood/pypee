@@ -4,6 +4,7 @@ from functools import wraps
 from types import MappingProxyType
 from typing import Mapping
 from pandas import json_normalize
+from concurrent.futures import ThreadPoolExecutor
 import textwrap
 import json
 import re
@@ -11,13 +12,10 @@ import re
 
 """
 Title: Pypeline
-Current Version: 0.0.05
+Current Version: 0.0.06
 Created By: Chad Wood
 Last Modified On: 20230210
-Last Modification: Cleaned up TaskOpsUtils._run_opperation() a bit, though it could probably improve further by a name change.
-Added a generator object as an attribute to Pipeline (Pipeline.tasks) which will provide a generator of nested dicts {pipe_name: {task_name: task}}
-    I plan to use this feature in a future update for multithreading.
-Added __getattribute__ and __getitem__ to Pipe and Pipeline to allow dot-notation navigation between objects.
+Last Modification: Added Basic MultiThreading! Woohoo
 
 Note: Next should be restricting setattribute, and allowing setitem to adding pipes/tasks to a pipeline/pipe, respectively.
 There should also be some functionality to scope a wrangler/loader to a task, pipe, or entire pipeline--while still letting set wrangler/loaders at more granular levels override the parent counterpart.
@@ -906,10 +904,14 @@ class Pipeline(Pipe):
         if pipe._pipe_failed:
             raise Exception("Pipeline failed earlier, cannot run further operations")
             
-    def tasks(self):
+    def pipes_generator(self):
+        for pipe_name, pipe in self.pipes.items():
+            yield pipe
+    
+    def tasks_generator(self):
         for pipe_name, pipe in self.pipes.items():
             for task_name, task in pipe.task_map.items():
-                yield {pipe_name: {task_name: task}}
+                yield task
     
     def initialize_pipe(self, pipe_name):
         pipe = self.pipes[pipe_name]    
@@ -927,18 +929,7 @@ class Pipeline(Pipe):
             
     def initialize(self):
         results = self.initialize_pipes(self.pipes.keys()) 
-        return results
-    
-    def run_task(self, pipe_name, task_name):
-        self._check_pipe_not_failed(pipe)
-        self.pipes[pipe_name].run_task(task_name)     
-        
-    def run_pipe(self, pipe_name):
-        pipe = self.pipes[pipe_name]
-        self._check_pipe_not_failed(pipe)
-        result = pipe.run()
-        
-        return result
+        return results  
     
     def run(self):
         results = dict()
@@ -949,11 +940,41 @@ class Pipeline(Pipe):
         
         return results
     
-    def get_pipe(self, pipe_name):
-        return self.pipes[pipe_name]
+    def get_statuses(self):
+        statuses = {}
+        for pipe_name, pipe in self.pipes.items():
+            statuses.update({pipe_name:pipe.update_status()})
     
-    def get_pipe_data(self, pipe_name, operator=None):
-        pipe = self.pipes[pipe_name]
-        data = pipe.get_all_tasks_data(operator=operator)
+    def _update_statuses(self):
+        for pipe_name, pipe in self.pipes.items():
+            pipe.update_status()
+
+    def multithread_tasks(self, tasks=None):
+        if tasks is None:
+             tasks = self.tasks_generator()
+
+        with ThreadPoolExecutor() as executor:
+            futures = [executor.submit(task.run) for task in tasks]
+
+            results = {}
+            for future in futures:
+                index = futures.index(future)
+                results[index] = future.result()
+                
+        self._update_statuses()
+        return results
+
+    def multithread_pipes(self, pipes=None):
+        if pipes is None:
+            pipes = self.pipes_generator()
+
+        with ThreadPoolExecutor() as executor:
+            futures = [executor.submit(pipe.run) for pipe in pipes]
+
+            results = {}
+            for future in futures:
+                index = futures.index(future)
+                results[index] = future.result()
         
-        return data
+        self._update_statuses()
+        return results
