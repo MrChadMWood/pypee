@@ -11,10 +11,18 @@ import re
 
 """
 Title: Pypeline
-Current Version: 0.0.04
+Current Version: 0.0.05
 Created By: Chad Wood
-Last Modified On: 20230208
-Last Modification: Added logic to MultiRequestTask for performing sequenced requests. Options for improving the implementation should be explored, as it isn't exactly elegant at the moment. Review TaskOpsUtils._run_opperation() comments for more details.
+Last Modified On: 20230210
+Last Modification: Cleaned up TaskOpsUtils._run_opperation() a bit, though it could probably improve further by a name change.
+Added a generator object as an attribute to Pipeline (Pipeline.tasks) which will provide a generator of nested dicts {pipe_name: {task_name: task}}
+    I plan to use this feature in a future update for multithreading.
+Added __getattribute__ and __getitem__ to Pipe and Pipeline to allow dot-notation navigation between objects.
+
+Note: Next should be restricting setattribute, and allowing setitem to adding pipes/tasks to a pipeline/pipe, respectively.
+There should also be some functionality to scope a wrangler/loader to a task, pipe, or entire pipeline--while still letting set wrangler/loaders at more granular levels override the parent counterpart.
+
+Note: I also created a file pipelineutils which contains a credential manager (for PyKeePass) and a Pipeline-Scopable wrangler that maps input [dict,] commands to Pandas operations. This would idealy be used as a convenient way to store Pandas operations as JSON, along with the JSON representation of the Task it applies to. The mapping functionality still requires some debugging, but in theory it will allow regular methods, loc, operators (+, -, =, ...), and the ability to store named _variables for later use. The mapping verifies that passed arguments are attributes of a DataFrame, and uses `getattr()` for security reasons.
 """
 
 class StatusError(Exception):
@@ -110,7 +118,7 @@ class Handle(OperatorUtils):
     - run(request, handle_operations={}): Handles the data using the provided `api_client` callable, with the provided `handle_operations`.
     """
 
-    def __init__(self, api_client, **kwargs):
+    def __init__(self, api_handle, **kwargs):
         """
         Initialize the Handle class.
 
@@ -119,7 +127,7 @@ class Handle(OperatorUtils):
         """
         super().__init__(**kwargs)
         self._status = OpStatus.UNINITIALIZED
-        self.api_client = api_client
+        self.client = api_handle
         self.initialize_error = None
     
     def initialize(self, credentials):
@@ -130,7 +138,7 @@ class Handle(OperatorUtils):
         :raises: Exception if error occurs during initialization
         """
         try:
-            self.api_client = self.api_client(credentials)
+            self.client = self.client(credentials)
             self._status = OpStatus.INITIALIZED
         except Exception as e:
             self._status = OpStatus.FAIL
@@ -148,9 +156,9 @@ class Handle(OperatorUtils):
         return self._status
     
     @OperatorUtils._catch_runtime_errors
-    def run(self, request, handle_operations={}):
+    def run(self, request, handle_operations=[]):
         if self._status == OpStatus.INITIALIZED:
-            response = self.api_client.get_data(request, **handle_operations)
+            response = self.client.get_data(request, *handle_operations)
         else:
             raise StatusError(
                 f'Can not run while Handle is {self._status}')
@@ -174,7 +182,7 @@ class Wrangler(OperatorUtils):
     :method:
     - initialize(): Initializes the user supplied wrangler.
     - status: A property that returns the current status of the Wrangler.
-    - run(data, wrangle_operations={}): Wrangles the data using the provided `wrangler` callable, with the provided `wrangle_operations`.
+    - run(data, wrangle_operations=[]): Wrangles the data using the provided `wrangler` callable, with the provided `wrangle_operations`.
     """
     def __init__(self, wrangler, **kwargs):
         """
@@ -214,9 +222,9 @@ class Wrangler(OperatorUtils):
         return self._status
     
     @OperatorUtils._catch_runtime_errors
-    def run(self, data, wrangle_operations={}):
+    def run(self, data, wrangle_operations=[]):
         if self._status == OpStatus.INITIALIZED:
-            response = self.wrangler.wrangle(data, **wrangle_operations)
+            response = self.wrangler.wrangle(data, *wrangle_operations)
         else:
             raise StatusError(
                 f'Can not run while Wrangler is {self._status}')
@@ -281,9 +289,9 @@ class Loader(OperatorUtils):
         return self._status
     
     @OperatorUtils._catch_runtime_errors
-    def run(self, data, load_operations={}):
+    def run(self, data, load_operations=[]):
         if self._status == OpStatus.INITIALIZED:
-            response = self.loader.load(data, **load_operations)
+            response = self.loader.load(data, *load_operations)
         else:
             raise StatusError(
                 f'Can not run while Loader is {self._status}')
@@ -311,14 +319,7 @@ class TaskOpsUtils:
     - _run_operation(op, runner, passable, skip_status_update=False): Run an operation.
     - update_status(): Update the overall status of the task.
     """
-    def __init__(self, handle, wrangler=None, loader=None):
-        """
-        Initialize the TaskOpsUtils class.
-
-        :param handle: A callable for handling the request.
-        :param wrangler: A callable for wrangling the data from handle.
-        :param loader: A callable for loading the data from wrangler.
-        """
+    def __init__(self, handle, wrangler, loader, handle_ops, wrangle_ops, load_ops):
         self.handle = handle
         self.wrangler = wrangler
         self.loader = loader
@@ -328,46 +329,22 @@ class TaskOpsUtils:
         self.load_result = None
         self.error = None
         
-        self.operations = {'handle': TaskStatus.PENDING}
+        self.op_statuses = {'handle': TaskStatus.PENDING}
         if wrangler:
-            self.operations.update({'wrangle': TaskStatus.PENDING})
+            self.op_statuses.update({'wrangle': TaskStatus.PENDING})
         if loader:
-            self.operations.update({'load': TaskStatus.PENDING})
-    
-    def get_response(self, operator):
-        """
-        Return the response for the specified operation.
-
-        :param operator: The name of the operation.
-        :return: The response of the operation.
-        """
-        return self.data[operator]
-    
-    def _run_operation(self, op, runner, passable, skip_status_update=False):
-        """
-        Run an operation.
-
-        :param op: The name of the operation to run.
-        :param runner: The callable for running the operation.
-        :param passable: The argument to pass to the runner.
-        :param skip_status_update: Skip updating the task's status.
-        :return: The status of the operation.
-        """
-        # TODO: Clean this up, make it redundant or more intuitive to debug... its confusing.
-        self.operations[op] = TaskStatus.INCOMPLETE
-
-        response, self.error = runner.run(passable)
-        status = TaskStatus.FAIL if self.error is not None else TaskStatus.COMPLETE
-
-        self.operations[op] = status
-        
-        # TODO: Update this. Does there really need to be unique handling ber type in here...?
-        # Should self.data be stored in the bottom derived classes?
-        if self.__class__.__name__ == 'MultiRequestTask' and op == 'handle':
-            self.data[op].append(response)
-        else:
-            self.data[op] = response
+            self.op_statuses.update({'load': TaskStatus.PENDING})
             
+        self.special_operations = dict(
+            handle_ops = handle_ops,
+            wrangle_ops = wrangle_ops,
+            load_ops = load_ops
+        )
+    
+    def _run_operation(self, op, runner, passable, spec_ops=[], skip_status_update=False):
+        self.op_statuses[op] = TaskStatus.INCOMPLETE
+        response, self.error = runner.run(passable, spec_ops)
+        status = self.op_statuses[op] = TaskStatus.FAIL if self.error is not None else TaskStatus.COMPLETE           
 
         if not skip_status_update:
             self.update_status()
@@ -410,16 +387,18 @@ class Task(TaskOpsUtils):
         :param description: The description of the task.
         :param kwargs: Other keyword arguments.
         """
-        super().__init__(handle, wrangler, loader)
+        super().__init__(
+            handle=handle, 
+            wrangler=wrangler, 
+            loader=loader, 
+            handle_ops=kwargs.get('handle_ops', []), 
+            wrangle_ops=kwargs.get('wrangle_ops', []), 
+            load_ops=kwargs.get('load_ops', [])
+        )
 
         self._status = TaskStatus.PENDING
         self.name = name
         self.description = description
-        self.data = dict(
-            handle=None,
-            wrangle=None,
-            load=None
-        )
         self.info = MappingProxyType({
             'name': name,
             'description': description,
@@ -432,7 +411,7 @@ class Task(TaskOpsUtils):
         })
 
     def __repr__(self):
-        return f"Task(name='{self.name}', status='{self.status}'),"
+        return f"Task('{self.name}', status='{self.status}'),"
 
     @property
     def status(self) -> TaskStatus:
@@ -440,14 +419,17 @@ class Task(TaskOpsUtils):
     
     def run(self):
         statuses = {}
-        for op in self.operations:
+        for op in self.op_statuses:
             status = None
             if op == 'handle':
-                status = self.run_request(skip_status_update=True)
-            elif op == 'wrangle' and self.operations['handle'] == TaskStatus.COMPLETE:
-                status = self.run_wrangle(skip_status_update=True)
-            elif op == 'load' and self.operations['wrangle'] == TaskStatus.COMPLETE:
-                status = self.run_load(skip_status_update=True)
+                spec_ops = self.special_operations.get('handle_ops')
+                status = self.run_request(spec_ops=spec_ops, skip_status_update=True)
+            elif op == 'wrangle' and self.op_statuses['handle'] == TaskStatus.COMPLETE:
+                spec_ops = self.special_operations.get('wrangle_ops')
+                status = self.run_wrangle(spec_ops=spec_ops, skip_status_update=True)
+            elif op == 'load' and self.op_statuses['wrangle'] == TaskStatus.COMPLETE:
+                spec_ops = self.special_operations.get('load_ops')
+                status = self.run_load(spec_ops=spec_ops, skip_status_update=True)
 
             statuses[op] = status
 
@@ -455,8 +437,8 @@ class Task(TaskOpsUtils):
         return statuses
 
     def update_status(self):
-        if len(set(self.operations.values())) == 1:
-            self._status = set(self.operations.values()).pop()
+        if len(set(self.op_statuses.values())) == 1:
+            self._status = set(self.op_statuses.values()).pop()
         else:
             self._status = TaskStatus.INCOMPLETE
 
@@ -482,17 +464,25 @@ class SingleRequestTask(Task):
     def __init__(self, name, request, handle, wrangler=None, loader=None, **kwargs):
         super().__init__(name, request, handle, wrangler, loader, **kwargs)
         self.request = request
+        self.data = dict(
+            handle=None,
+            wrangle=None,
+            load=None
+        )
 
-    def run_request(self, skip_status_update=False):
-        status, response = self._run_operation('handle', self.handle, self.request, skip_status_update)
+    def run_request(self, spec_ops, skip_status_update=False):
+        status, response = self._run_operation('handle', self.handle, self.request, spec_ops, skip_status_update)
+        self.data['handle'] = response
         return status
 
-    def run_wrangle(self, skip_status_update=False):
-        status, response = self._run_operation('wrangle', self.wrangler, self, skip_status_update)
+    def run_wrangle(self, spec_ops, skip_status_update=False):
+        status, response = self._run_operation('wrangle', self.wrangler, self, spec_ops, skip_status_update)
+        self.data['wrangle'] = response
         return status
 
-    def run_load(self, skip_status_update=False):
-        status, response = self._run_operation('load', self.loader, self, skip_status_update)
+    def run_load(self, spec_ops, skip_status_update=False):
+        status, response = self._run_operation('load', self.loader, self, spec_ops, skip_status_update)
+        self.data['load'] = response
         return status
 
     
@@ -518,9 +508,13 @@ class MultiRequestTask(Task):
         self.requests: dict = requests
         self.pattern = re.compile(r'<<(.*?)>>')
         self.cached_unique_values = {}
-        self.data.update(handle=list())
+        self.data = dict(
+            handle=[],
+            wrangle=None,
+            load=None
+        )
         
-    def run_request(self, skip_status_update=False):
+    def run_request(self, spec_ops, skip_status_update=False):
         statuses = dict()
         pattern = self.pattern
         
@@ -541,21 +535,25 @@ class MultiRequestTask(Task):
                 separator = request.get("%separator%", ", ")
                 request = json.loads(pattern.sub(lambda x: hook(x, separator), json.dumps(request)))
             
-            status, response = self._run_operation('handle', self.handle, request, skip_status_update)
-            last_response = json_normalize(response)
+            status, response = self._run_operation('handle', self.handle, request, spec_ops, skip_status_update)
+            self.data['handle'].append(response)
+            
             statuses.update({_iter:status})
-                                  
             if status is not TaskStatus.COMPLETE:
                 break
+            else:
+                last_response = json_normalize(response)
         
         return statuses
                                   
-    def run_wrangle(self, skip_status_update=False):
-        status, response = self._run_operation('wrangle', self.wrangler, self, skip_status_update)
+    def run_wrangle(self, spec_ops, skip_status_update=False):
+        status, response = self._run_operation('wrangle', self.wrangler, self, spec_ops, skip_status_update)
+        self.data['wrangle'] = response
         return status
 
-    def run_load(self, skip_status_update=False):
-        status, response = self._run_operation('load', self.loader, self, skip_status_update)
+    def run_load(self, spec_ops, skip_status_update=False):
+        status, response = self._run_operation('load', self.loader, self, spec_ops, skip_status_update)
+        self.data['load'] = response
         return status
         
         
@@ -582,17 +580,12 @@ class TaskManagementUtils:
     - get_all_tasks_data(self, operator=None): Gets the data of all tasks, returns all data for each task if operator is None.
     - get_task(self, task_name): Gets a task by the given name, raises ValueError if task not found.
     """
-    def __init__(self, tasks):
+    def __init__(self):
         self.operator_statuses = dict(
             handle = None,
             wrangler = None,
-            loader = None)
-        task_objs = [
-            self.task_obj_from_dict(
-                task_data, self.handle, self.wrangler, self.loader
-            ) for task_data in tasks]
-        
-        self.task_map = {task.name: task for task in task_objs}
+            loader = None
+        )
 
     # Handles dynamic reading of in-string variables
     @staticmethod
@@ -644,8 +637,8 @@ class TaskManagementUtils:
             request = task.pop('request')
             task_obj = SingleRequestTask(name, request, handle, wrangler, loader, **task)
         elif task.get('requests'):
-            request = task.pop('requests')
-            task_obj = MultiRequestTask(name, request, handle, wrangler, loader, **task)
+            requests = task.pop('requests')
+            task_obj = MultiRequestTask(name, requests, handle, wrangler, loader, **task)
         else:
             raise ValueError("Either 'request' or 'requests' must be supplied.")
 
@@ -760,31 +753,52 @@ class Pipe(TaskManagementUtils):
 
     Inherits all methods from the parent class, TaskManagementUtils.
     """
-    def __init__(self, handle, tasks=None, tasks_file_path=None, tasks_kwargs=None, 
+    def __init__(self, api_handle, tasks=None, tasks_file_path=None, tasks_kwargs=None, 
                  wrangler=None, loader=None, secret_id=None, name=None):
+        super().__init__()
         self._status: PipeStatus = PipeStatus.IDLE
         self.name = name
         self.secret_id = secret_id
-        self.handle = Handle(handle)
+        self.handle = Handle(api_handle)
         self.wrangler = Wrangler(wrangler) if wrangler else None
         self.loader = Loader(loader) if loader else None
         tasks = tasks if tasks is not None else self.read_tasks(
             tasks_file_path, tasks_kwargs, dynamic_reader=self.dynamically_read)
-        super().__init__(tasks)
         
-        self._pipe_failed = False  
+        task_objs = [
+            self.task_obj_from_dict(
+                task_data, self.handle, self.wrangler, self.loader
+            ) for task_data in tasks]
         
-    @property
-    def status(self) -> PipeStatus:
-        return self._status   
+        self.task_map = {task.name: task for task in task_objs}
+        self._pipe_failed = False    
 
+    def __getattribute__(self, name):
+        try:
+            return object.__getattribute__(self, name)
+        except AttributeError:
+            if name in self.task_map:
+                return self.task_map[name]
+            else:
+                raise AttributeError(f"Pipe object has no attribute '{name}'")
+
+    def __getitem__(self, name):
+        try:
+            return self.task_map[name]
+        except KeyError:
+            raise KeyError(f"'{name}' not in Pipe")
+            
     def __repr__(self):
         task_strs = [task.__repr__() for task in self.task_map.values()]
         task_str = '\n'.join(task_strs)
         indented_task_str = textwrap.indent(task_str, '  ')
         return (
-            f"Pipe(name='{self.name}', status='{self._status.value}',\n"
-                    f"{indented_task_str}\n)")
+            f"Pipe('{self.name}', status='{self._status.value}',\n"
+                    f"{indented_task_str.rstrip(',')})")
+    
+    @property
+    def status(self) -> PipeStatus:
+        return self._status 
     
     def update_status(self):
         status_counts = self.get_task_status_counts()
@@ -862,20 +876,40 @@ class Pipeline(Pipe):
         #self.loader = loader
         self.id = pipeline_id
         self.credential_manager = credential_manager
-        self.pipes = MappingProxyType({pipe.name:pipe for pipe in pipes})
+        self.pipes = {pipe.name:pipe for pipe in pipes}
     
     def __repr__(self):
         pipe_strs = [pipe.__repr__() for pipe in self.pipes.values()]
         pipe_str = '\n'.join(pipe_strs)
         indented_pipe_str = textwrap.indent(pipe_str, '  ')
         return (
-            f"Pipeline(id='{self.id}',\n"
-                    f"{indented_pipe_str}\n)")
+            f"Pipeline('{self.id}',\n"
+                    f"{indented_pipe_str.rstrip(',')})")
+    
+    def __getattribute__(self, name):
+        try:
+            return object.__getattribute__(self, name)
+        except AttributeError:
+            if name in self.pipes:
+                return self.pipes[name]
+            else:
+                raise AttributeError(f"Pipeline object has no attribute '{name}'")
+
+    def __getitem__(self, name):
+        try:
+            return self.pipes[name]
+        except KeyError:
+            raise KeyError(f"'{name}' not in Pipeline")
     
     @staticmethod
     def _check_pipe_not_failed(pipe):
         if pipe._pipe_failed:
             raise Exception("Pipeline failed earlier, cannot run further operations")
+            
+    def tasks(self):
+        for pipe_name, pipe in self.pipes.items():
+            for task_name, task in pipe.task_map.items():
+                yield {pipe_name: {task_name: task}}
     
     def initialize_pipe(self, pipe_name):
         pipe = self.pipes[pipe_name]    
