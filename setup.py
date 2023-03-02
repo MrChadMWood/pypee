@@ -18,6 +18,6 @@ setuptools.setup(
     license='GPL-3.0-or-later',
     packages=['pypee'],
     install_requires=[
-        'pandas>=1.4.4'
+        'pandas>=1.3.5'
     ],
 )
