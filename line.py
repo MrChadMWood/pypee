@@ -20,7 +20,9 @@ Last Modification: Added Basic MultiThreading! Woohoo
 Note: Next should be restricting setattribute, and allowing setitem to adding pipes/tasks to a pipeline/pipe, respectively.
 There should also be some functionality to scope a wrangler/loader to a task, pipe, or entire pipeline--while still letting set wrangler/loaders at more granular levels override the parent counterpart.
 
-Note: I also created a file pipelineutils which contains a credential manager (for PyKeePass) and a Pipeline-Scopable wrangler that maps input [dict,] commands to Pandas operations. This would idealy be used as a convenient way to store Pandas operations as JSON, along with the JSON representation of the Task it applies to. The mapping functionality still requires some debugging, but in theory it will allow regular methods, loc, operators (+, -, =, ...), and the ability to store named _variables for later use. The mapping verifies that passed arguments are attributes of a DataFrame, and uses `getattr()` for security reasons.
+Note: I also created a file pipelineutils which contains a credential manager (for PyKeePass) and a Pipeline-Scopable wrangler that maps input (using [dict,] format) to Pandas operations. This would idealy be used as a convenient way to store Pandas operations as JSON, along with the JSON representation of the Task it applies to. The mapping functionality still requires some debugging, but in theory it will allow regular methods, loc, operators (+, -, =, ...), and the ability to store named _variables for later use. The mapping verifies that passed arguments are attributes of a DataFrame, and uses `getattr` opposed to `eval` for security.
+
+Note: Many of the docstrings in this file are slightly outdated. I will be updating them in time, but until then do not expect them to be 100% accurate. Utilize them as a non-absolute guide, for now.
 """
 
 class StatusError(Exception):
@@ -667,7 +669,7 @@ class TaskManagementUtils:
             pending = 0,
             incomplete = 0,
             complete = 0,
-            failed = 0,
+            fail = 0,
         )
         
         for task_name, task in self.task_map.items():

@@ -1,0 +1,217 @@
+,criteria_id,canonical_name
+29558,2004,Afghanistan
+29582,2008,Albania
+29600,2010,Antarctica
+29615,2012,Algeria
+29656,2016,American Samoa
+29693,2020,Andorra
+29725,2024,Angola
+29752,2028,Antigua and Barbuda
+29774,2031,Azerbaijan
+29783,2032,Argentina
+29806,2036,Australia
+29827,2040,Austria
+29859,2044,The Bahamas
+29899,2048,Bahrain
+29918,2050,Bangladesh
+29919,2051,Armenia
+29926,2052,Barbados
+29967,2056,Belgium
+30047,2064,Bhutan
+30079,2068,Bolivia
+30085,2070,Bosnia and Herzegovina
+30106,2072,Botswana
+30131,2076,Brazil
+30207,2084,Belize
+30261,2090,Solomon Islands
+30322,2096,Brunei
+30351,2100,Bulgaria
+30388,2104,Myanmar (Burma)
+30425,2108,Burundi
+30457,2112,Belarus
+30495,2116,Cambodia
+30532,2120,Cameroon
+30558,2124,Canada
+30617,2132,Cape Verde
+30685,2140,Central African Republic
+30686,2144,Sri Lanka
+30726,2148,Chad
+30767,2152,Chile
+30808,2156,China
+30833,2162,Christmas Island
+30834,2166,Cocos (Keeling) Islands
+30835,2170,Colombia
+30836,2174,Comoros
+30838,2178,Republic of the Congo
+30839,2180,Democratic Republic of the Congo
+30840,2184,Cook Islands
+30841,2188,Costa Rica
+30842,2191,Croatia
+30843,2196,Cyprus
+30844,2203,Czechia
+30845,2204,Benin
+30846,2208,Denmark
+30847,2212,Dominica
+30848,2214,Dominican Republic
+30849,2218,Ecuador
+30850,2222,El Salvador
+30851,2226,Equatorial Guinea
+30852,2231,Ethiopia
+30853,2232,Eritrea
+30854,2233,Estonia
+30857,2239,South Georgia and the South Sandwich Islands
+30858,2242,Fiji
+30859,2246,Finland
+30860,2250,France
+30862,2258,French Polynesia
+30863,2260,French Southern and Antarctic Lands
+30864,2262,Djibouti
+30865,2266,Gabon
+30866,2268,Georgia
+30867,2270,The Gambia
+30869,2276,Germany
+30870,2288,Ghana
+30872,2296,Kiribati
+30873,2300,Greece
+30875,2308,Grenada
+30877,2316,Guam
+30878,2320,Guatemala
+30879,2324,Guinea
+30880,2328,Guyana
+30881,2332,Haiti
+30882,2334,Heard Island and McDonald Islands
+30883,2336,Vatican City
+30884,2340,Honduras
+30886,2348,Hungary
+30887,2352,Iceland
+30888,2356,India
+30889,2360,Indonesia
+30890,2368,Iraq
+30891,2372,Ireland
+30892,2376,Israel
+30893,2380,Italy
+30894,2384,Cote d'Ivoire
+30895,2388,Jamaica
+30896,2392,Japan
+30897,2398,Kazakhstan
+30898,2400,Jordan
+30899,2404,Kenya
+30900,2410,South Korea
+30901,2414,Kuwait
+30902,2417,Kyrgyzstan
+30903,2418,Laos
+30904,2422,Lebanon
+30905,2426,Lesotho
+30906,2428,Latvia
+30907,2430,Liberia
+30908,2434,Libya
+30909,2438,Liechtenstein
+30910,2440,Lithuania
+30911,2442,Luxembourg
+30913,2450,Madagascar
+30914,2454,Malawi
+30915,2458,Malaysia
+30916,2462,Maldives
+30917,2466,Mali
+30918,2470,Malta
+30920,2478,Mauritania
+30921,2480,Mauritius
+30922,2484,Mexico
+30923,2492,Monaco
+30924,2496,Mongolia
+30925,2498,Moldova
+30926,2499,Montenegro
+30928,2504,Morocco
+30929,2508,Mozambique
+30930,2512,Oman
+30931,2516,Namibia
+30932,2520,Nauru
+30933,2524,Nepal
+30934,2528,Netherlands
+30935,2531,Curacao
+30937,2534,Sint Maarten
+30938,2535,Caribbean Netherlands
+30939,2540,New Caledonia
+30940,2548,Vanuatu
+30941,2554,New Zealand
+30942,2558,Nicaragua
+30943,2562,Niger
+30944,2566,Nigeria
+30945,2570,Niue
+30946,2574,Norfolk Island
+30947,2578,Norway
+30948,2580,Northern Mariana Islands
+30949,2581,United States Minor Outlying Islands
+30950,2583,Federated States of Micronesia
+30951,2584,Marshall Islands
+30952,2585,Palau
+30953,2586,Pakistan
+30954,2591,Panama
+30955,2598,Papua New Guinea
+30956,2600,Paraguay
+30957,2604,Peru
+30958,2608,Philippines
+30959,2612,Pitcairn Islands
+30960,2616,Poland
+30961,2620,Portugal
+30962,2624,Guinea-Bissau
+30963,2626,Timor-Leste
+30965,2634,Qatar
+30967,2642,Romania
+30968,2643,Russia
+30969,2646,Rwanda
+30970,2652,Saint Barthelemy
+30971,2654,"Saint Helena, Ascension and Tristan da Cunha"
+30972,2659,Saint Kitts and Nevis
+30974,2662,Saint Lucia
+30975,2663,Saint Martin
+30976,2666,Saint Pierre and Miquelon
+30977,2670,Saint Vincent and the Grenadines
+30978,2674,San Marino
+30979,2678,Sao Tome and Principe
+30980,2682,Saudi Arabia
+30981,2686,Senegal
+30982,2688,Serbia
+30983,2690,Seychelles
+30984,2694,Sierra Leone
+30985,2702,Singapore
+30986,2703,Slovakia
+30987,2704,Vietnam
+30988,2705,Slovenia
+30989,2706,Somalia
+30990,2710,South Africa
+30991,2716,Zimbabwe
+30992,2724,Spain
+30994,2736,Sudan
+30995,2740,Suriname
+30997,2748,Eswatini
+30998,2752,Sweden
+30999,2756,Switzerland
+31000,2762,Tajikistan
+31001,2764,Thailand
+31002,2768,Togo
+31003,2772,Tokelau
+31004,2776,Tonga
+31005,2780,Trinidad and Tobago
+31006,2784,United Arab Emirates
+31007,2788,Tunisia
+31008,2792,Turkey
+31009,2795,Turkmenistan
+31011,2798,Tuvalu
+31012,2800,Uganda
+31013,2804,Ukraine
+31014,2807,North Macedonia
+31015,2818,Egypt
+31016,2826,United Kingdom
+31017,2831,Guernsey
+31018,2832,Jersey
+31019,2834,Tanzania
+31020,2840,United States
+31022,2854,Burkina Faso
+31023,2858,Uruguay
+31024,2860,Uzbekistan
+31025,2862,Venezuela
+31026,2876,Wallis and Futuna
+31027,2882,Samoa
+31028,2887,Yemen
+31029,2894,Zambia
