@@ -11,9 +11,9 @@ setuptools.setup(
     description='A Python ETL Pipeline Package.',
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url='https://github.com/MrChadMWood/Pypee',
+    url='https://github.com/MrChadMWood/pypee',
     project_urls = {
-        "Bug Tracker": "https://github.com/MrChadMWood/Pypee/issues"
+        "Bug Tracker": "https://github.com/MrChadMWood/pypee/issues"
     },
     license='GPL-3.0-or-later',
     packages=['pypee'],
