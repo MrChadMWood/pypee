@@ -18,15 +18,6 @@ setuptools.setup(
     license='GPL-3.0-or-later',
     packages=['pypee'],
     install_requires=[
-        'enum',
-        'traceback',
-        'functools',
-        'types',
-        'typing',
-        'pandas',
-        'concurrent.futures',
-        'textwrap',
-        'json',
-        're',
+        'pandas==1.4.4'
     ],
 )
