@@ -1,8 +1,6 @@
 class KeePassMan:
     def __init__(self, db_dir, *args, **kwargs):
         from pykeepass import PyKeePass
-
-        # PyKeePass Instance
         self.cred_retriever = PyKeePass(db_dir, *args, **kwargs)
 
     # Retrieves credentials
