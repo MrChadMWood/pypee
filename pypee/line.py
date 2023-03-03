@@ -102,7 +102,7 @@ class OperatorUtils:
 
 class Handle(OperatorUtils):
     """
-    Class to handle the processing of data in the pipeline.
+    Class to extract data from a data source. It wraps around an arbitrary API client.
     :param api_client: A callable for handling data.
     :param args: Other positional arguments.
     :param kwargs: Other keyword arguments.
